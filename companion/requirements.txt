@@ -1,5 +1,10 @@
 aiohttp>=3.10
 zeroconf>=0.132
-# 윈도우 미디어 제어(SMTC). 윈도우에서만 설치됩니다.
-winsdk>=1.0.0b10; sys_platform == "win32"
 certifi>=2024.2.2
+# 윈도우 미디어 제어(SMTC). 윈도우에서만 설치됩니다.
+# (예전 winsdk 패키지는 관리가 끊겨 Python 3.13+ 용 휠이 없으므로 후속인 pywinrt를 씁니다)
+winrt-runtime>=2.0; sys_platform == "win32"
+winrt-Windows.Foundation>=2.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=2.0; sys_platform == "win32"
+winrt-Windows.Media.Control>=2.0; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=2.0; sys_platform == "win32"

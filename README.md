@@ -20,8 +20,9 @@
 ## 1. 윈도우 컴패니언 설치
 
 1. [Python 3.11 이상](https://www.python.org/downloads/windows/)을 설치합니다. 설치할 때 "Add python.exe to PATH"에 체크하세요.
-2. `companion` 폴더를 PC에 복사한 뒤 `run_companion.bat`을 더블클릭합니다.
-   - 처음 실행하면 가상환경을 만들고 패키지를 설치합니다(1~2분).
+2. `companion` 폴더를 **짧은 경로**(예: `C:\AIDock\companion`)에 복사한 뒤 `run_companion.bat`을 더블클릭합니다.
+   - 처음 실행하면 가상환경을 만들고 패키지를 설치합니다(1~2분). `requirements.txt`가 바뀌거나 설치가 실패했으면 다음 실행 때 다시 설치합니다.
+   - 경로가 너무 길면(윈도우 260자 제한) 미디어 제어용 `winrt` DLL을 불러오지 못해 `winrt 미설치`로 표시됩니다. 짧은 경로에 두세요.
    - **윈도우 방화벽 창이 뜨면 "개인 네트워크"에 허용**하세요. 허용하지 않으면 기기가 PC에 접속할 수 없습니다.
 3. 로그에 `서버 시작: 0.0.0.0:8765`가 나오면 준비가 끝난 것입니다. 브라우저에서 `http://localhost:8765/state`를 열면 현재 상태를 확인할 수 있습니다.
 
@@ -64,13 +65,15 @@
 2. 토스프론트2에서 개발자 옵션을 켜고 USB 디버깅(또는 무선 디버깅)을 활성화합니다.
 3. Android Studio에서 ▶ Run을 누르면 설치됩니다. 또는 `Build > Build APK(s)`로 APK를 만들어 직접 설치해도 됩니다.
 
-**Android Studio 없이 명령줄로 빌드할 때 (이 맥에 설치된 도구 사용):**
-```bash
-cd android && JAVA_HOME=~/.local/aidock-tools/jdk/Contents/Home ./gradlew assembleDebug
+**Android Studio 없이 명령줄로 빌드할 때 (윈도우):** JDK 17 이상과 Android SDK(platform 35)가 필요합니다. SDK 위치는 `android/local.properties`에 `sdk.dir=C\:\\Users\\<사용자>\\AppData\\Local\\Android\\Sdk` 형식으로 적거나 환경변수 `ANDROID_HOME`으로 지정합니다.
+```powershell
+cd android
+$env:JAVA_HOME = "C:\경로\jdk-17"
+.\gradlew.bat assembleDebug
 ```
 APK는 `android/app/build/outputs/apk/debug/app-debug.apk`에 생깁니다. 기기에 설치하려면:
-```bash
-~/Library/Android/sdk/platform-tools/adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
 ### 사용법

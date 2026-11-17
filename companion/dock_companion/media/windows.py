@@ -19,16 +19,24 @@ from ..state import Hub
 log = logging.getLogger("aidock.media")
 
 try:
-    from winsdk.windows.media.control import (
+    # pywinrt (winrt-* 패키지). 예전 winsdk가 설치돼 있으면 그것도 씁니다.
+    from winrt.windows.media.control import (
         GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     )
-    from winsdk.windows.storage.streams import Buffer, DataReader, InputStreamOptions
+    from winrt.windows.storage.streams import Buffer, DataReader, InputStreamOptions
 except ImportError:  # pragma: no cover
-    SessionManager = None
+    try:
+        from winsdk.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager as SessionManager,
+        )
+        from winsdk.windows.storage.streams import Buffer, DataReader, InputStreamOptions
+    except ImportError:
+        SessionManager = None
 
 # GlobalSystemMediaTransportControlsSessionPlaybackStatus
 STATUS = {0: "closed", 1: "opened", 2: "changing", 3: "stopped", 4: "playing", 5: "paused"}
-BROWSERS = ("chrome", "msedge", "firefox", "brave", "whale", "opera")
+# Firefox는 앱 ID가 "308046B0AF4A39CB" 같은 설치 경로 해시로 나와서 따로 넣어둡니다.
+BROWSERS = ("chrome", "msedge", "firefox", "brave", "whale", "opera", "308046b0af4a39cb")
 
 VK = {"vol_up": 0xAF, "vol_down": 0xAE, "mute": 0xAD}
 KEYEVENTF_KEYUP = 0x0002
@@ -120,7 +128,7 @@ class WindowsMedia:
 
     async def run(self) -> None:
         if SessionManager is None:
-            await self.hub.set_media({"available": False, "reason": "winsdk 미설치 (pip install winsdk)"})
+            await self.hub.set_media({"available": False, "reason": "winrt 미설치 (pip install -r requirements.txt)"})
             return
         self.manager = await SessionManager.request_async()
         while True:
