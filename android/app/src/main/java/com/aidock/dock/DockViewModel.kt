@@ -3,6 +3,7 @@ package com.aidock.dock
 import android.app.Application
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -12,6 +13,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +27,10 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
+import org.java_websocket.handshake.ClientHandshake
+import org.java_websocket.server.WebSocketServer
 import org.json.JSONObject
+import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
 
 data class DockState(
@@ -60,13 +65,48 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
     private var connectJob: Job? = null
     private var discovery: Discovery? = null
 
+    /** PC 컴패니언이 이 기기로 먼저 접속해 온 연결 (역방향). 있으면 이쪽을 우선 씁니다. */
+    @Volatile private var inboundConn: org.java_websocket.WebSocket? = null
+    private var inbound: InboundServer? = null
+
     init {
+        startInbound()
         start()
     }
 
-    // ---------------- 연결 ----------------
+    // ---------------- 역방향 연결 (PC → 기기) ----------------
+
+    private fun startInbound() {
+        inbound = runCatching {
+            InboundServer(INBOUND_PORT, { _state.value.token }, object : InboundServer.Listener {
+                override fun onOpen(conn: org.java_websocket.WebSocket, peer: String) {
+                    val old = inboundConn
+                    inboundConn = conn
+                    if (old != null && old !== conn) old.close()
+                    // 기기→PC 시도는 멈춤
+                    connectJob?.cancel()
+                    socket?.cancel()
+                    discovery?.stop()
+                    _state.update { it.copy(connection = Connection.Connected(peer)) }
+                }
+
+                override fun onMessage(conn: org.java_websocket.WebSocket, text: String) {
+                    if (conn === inboundConn) handle(text)
+                }
+
+                override fun onClose(conn: org.java_websocket.WebSocket) {
+                    if (conn !== inboundConn) return
+                    inboundConn = null
+                    viewModelScope.launch { start() }
+                }
+            }).also { it.start() }
+        }.onFailure { Log.w(TAG, "inbound server failed", it) }.getOrNull()
+    }
+
+    // ---------------- 연결 (기기 → PC) ----------------
 
     private fun start() {
+        if (inboundConn?.isOpen == true) return
         connectJob?.cancel()
         socket?.cancel()
         discovery?.stop()
@@ -82,7 +122,7 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun connectLoop(address: String) {
-        if (connectJob?.isActive == true) return
+        if (connectJob?.isActive == true || inboundConn?.isOpen == true) return
         connectJob = viewModelScope.launch {
             var backoff = 1000L
             var failures = 0
@@ -93,6 +133,10 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
                 val url = "ws://$address/ws" + if (token.isNotEmpty()) "?token=$token" else ""
                 socket = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
+                        if (inboundConn?.isOpen == true) {
+                            webSocket.close(1000, "inbound active")
+                            return
+                        }
                         backoff = 1000L
                         failures = 0
                         _state.update { it.copy(connection = Connection.Connected(address)) }
@@ -164,7 +208,14 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------- 명령 ----------------
 
     private fun send(obj: JSONObject) {
-        socket?.send(obj.toString())
+        val text = obj.toString()
+        val inb = inboundConn
+        if (inb != null && inb.isOpen) {
+            // 웹소켓 서버 스레드와 겹치지 않게 IO 스레드에서 보냄
+            viewModelScope.launch(Dispatchers.IO) { runCatching { inb.send(text) } }
+        } else {
+            socket?.send(text)
+        }
     }
 
     fun media(cmd: String, value: Double? = null) = send(JSONObject().apply {
@@ -185,10 +236,60 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
         connectJob?.cancel()
         socket?.cancel()
         discovery?.stop()
+        runCatching { inbound?.stop(1000) }
     }
 
     companion object {
+        const val TAG = "AIDock"
+        /** PC가 이 기기로 접속할 때 쓰는 포트 (컴패니언 config 의 device_port 와 같아야 함) */
+        const val INBOUND_PORT = 8766
         fun now() = System.currentTimeMillis() / 1000.0
+    }
+}
+
+/** PC 컴패니언의 접속을 기다리는 웹소켓 서버. 주고받는 메시지는 기기→PC 연결과 같습니다. */
+private class InboundServer(
+    port: Int,
+    private val token: () -> String,
+    private val listener: Listener,
+) : WebSocketServer(InetSocketAddress(port)) {
+    interface Listener {
+        fun onOpen(conn: org.java_websocket.WebSocket, peer: String)
+        fun onMessage(conn: org.java_websocket.WebSocket, text: String)
+        fun onClose(conn: org.java_websocket.WebSocket)
+    }
+
+    init {
+        isReuseAddr = true
+        connectionLostTimeout = 30
+    }
+
+    override fun onOpen(conn: org.java_websocket.WebSocket, handshake: ClientHandshake) {
+        val expected = token()
+        if (expected.isNotEmpty()) {
+            val given = Uri.parse("http://x" + handshake.resourceDescriptor).getQueryParameter("token")
+            if (given != expected) {
+                conn.close(1008, "bad token")
+                return
+            }
+        }
+        val peer = conn.remoteSocketAddress?.address?.hostAddress ?: "PC"
+        Log.i(DockViewModel.TAG, "PC connected from $peer")
+        listener.onOpen(conn, peer)
+    }
+
+    override fun onMessage(conn: org.java_websocket.WebSocket, message: String) =
+        listener.onMessage(conn, message)
+
+    override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) =
+        listener.onClose(conn)
+
+    override fun onError(conn: org.java_websocket.WebSocket?, ex: Exception) {
+        Log.w(DockViewModel.TAG, "inbound error", ex)
+    }
+
+    override fun onStart() {
+        Log.i(DockViewModel.TAG, "waiting for PC on port $port")
     }
 }
 

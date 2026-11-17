@@ -42,7 +42,11 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -75,6 +79,12 @@ import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/**
+ * 작은 세로 화면(토스프론트2: 800x1280 @320dpi = 400x640dp)용 촘촘한 배치.
+ * 썸네일을 작게, 카드 여백을 줄여서 사용량이 스크롤 없이 보이게 합니다.
+ */
+private val LocalDense = staticCompositionLocalOf { false }
+
 private val TimeFmt = DateTimeFormatter.ofPattern("HH:mm")
 private val SecFmt = DateTimeFormatter.ofPattern("ss")
 private val DateFmt = DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREAN)
@@ -92,13 +102,17 @@ fun DockScreen(vm: DockViewModel) {
         }
     }
 
+    val config = LocalConfiguration.current
+    val smallScreen = minOf(config.screenWidthDp, config.screenHeightDp) < 480
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(DockColors.Background)
-            .padding(20.dp)
+            .padding(if (smallScreen) 16.dp else 20.dp)
     ) {
         val landscape = maxWidth > maxHeight
+        val dense = if (landscape) maxHeight < 440.dp else maxHeight < 760.dp
+        CompositionLocalProvider(LocalDense provides dense) {
         if (landscape) {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -110,12 +124,13 @@ fun DockScreen(vm: DockViewModel) {
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                ClockPanel(now, state.connection, compact = false) { showSettings = true }
-                Spacer(Modifier.height(20.dp))
+                ClockPanel(now, state.connection, compact = dense) { showSettings = true }
+                Spacer(Modifier.height(if (dense) 12.dp else 20.dp))
                 UsagePanel(state, now, Modifier.weight(1f), onRefresh = vm::refresh)
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(if (dense) 12.dp else 16.dp))
                 MediaPanel(state, now, vm, Modifier.fillMaxWidth())
             }
+        }
         }
     }
 
@@ -188,7 +203,7 @@ private fun UsagePanel(state: DockState, now: Double, modifier: Modifier, onRefr
         modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(if (LocalDense.current) 8.dp else 12.dp),
     ) {
         if (state.providers.isEmpty()) {
             Card {
@@ -205,23 +220,25 @@ private fun UsagePanel(state: DockState, now: Double, modifier: Modifier, onRefr
 
 @Composable
 private fun ProviderCard(p: Provider, pcNow: Double) {
+    val dense = LocalDense.current
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(10.dp).clip(CircleShape).background(DockColors.provider(p.id)))
         Spacer(Modifier.width(8.dp))
-        Text(p.name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = DockColors.Text)
+        Text(p.name, fontSize = if (dense) 16.sp else 18.sp, fontWeight = FontWeight.SemiBold, color = DockColors.Text)
         Spacer(Modifier.weight(1f))
         Text(statusText(p, pcNow), fontSize = 12.sp, color = statusColor(p.status))
     }
     if (p.windows.isEmpty()) {
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(if (dense) 2.dp else 6.dp))
         Text(
             p.message.ifEmpty { "데이터 없음" },
-            fontSize = 13.sp, color = DockColors.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            fontSize = if (dense) 12.sp else 13.sp, color = DockColors.TextDim,
+            maxLines = if (dense) 1 else 2, overflow = TextOverflow.Ellipsis,
         )
         return
     }
     p.windows.take(4).forEach { w ->
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(if (dense) 8.dp else 10.dp))
         WindowRow(p.id, w, pcNow)
     }
 }
@@ -231,8 +248,15 @@ private fun WindowRow(providerId: String, w: UsageWindow, pcNow: Double) {
     // 초기화 시각이 지났으면 PC와 연결이 끊겨 있어도 0%로 간주
     val reset = w.resetsAt != null && w.resetsAt <= pcNow
     val pct = if (reset) 0.0 else w.usedPercent
+    val dense = LocalDense.current
+    val sub = when {
+        reset -> "초기화됨"
+        w.resetsAt != null -> "${countdown(w.resetsAt - pcNow)} 후 초기화"
+        else -> ""
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(w.label, fontSize = 14.sp, color = DockColors.TextDim, modifier = Modifier.width(96.dp),
+        Text(w.label, fontSize = 14.sp, color = DockColors.TextDim,
+            modifier = Modifier.width(if (dense) 64.dp else 96.dp),
             maxLines = 1, overflow = TextOverflow.Ellipsis)
         Box(
             Modifier
@@ -250,14 +274,15 @@ private fun WindowRow(providerId: String, w: UsageWindow, pcNow: Double) {
         }
         Spacer(Modifier.width(10.dp))
         Text("${pct.roundToInt()}%", fontSize = 16.sp, fontWeight = FontWeight.Medium,
-            color = DockColors.Text, modifier = Modifier.width(48.dp))
+            color = DockColors.Text, modifier = Modifier.width(if (dense) 42.dp else 48.dp))
+        if (dense) {
+            // 좁은 화면에서는 초기화 시각을 같은 줄 오른쪽에 붙여 한 줄로 끝냅니다.
+            Text(sub.removeSuffix(" 후 초기화"), fontSize = 12.sp, color = DockColors.TextDim,
+                modifier = Modifier.width(72.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End)
+        }
     }
-    val sub = when {
-        reset -> "초기화됨"
-        w.resetsAt != null -> "${countdown(w.resetsAt - pcNow)} 후 초기화"
-        else -> ""
-    }
-    if (sub.isNotEmpty()) {
+    if (sub.isNotEmpty() && !dense) {
         Text(sub, fontSize = 12.sp, color = DockColors.TextDim, modifier = Modifier.padding(start = 96.dp, top = 2.dp))
     }
 }
@@ -324,22 +349,47 @@ private fun MediaPanel(state: DockState, now: Double, vm: DockViewModel, modifie
 @Composable
 private fun ColumnScope.MediaContent(m: Media, state: DockState, now: Double, vm: DockViewModel) {
     val thumb = state.thumbnail
-    if (thumb != null) {
-        Image(
-            thumb, contentDescription = null, contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(RoundedCornerShape(10.dp))
-        )
-        Spacer(Modifier.height(12.dp))
+    val dense = LocalDense.current
+    if (dense) {
+        // 작은 화면: 썸네일을 왼쪽에 작게, 제목은 오른쪽에
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (thumb != null) {
+                Image(
+                    thumb, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .width(120.dp)
+                        .aspectRatio(16f / 9f)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(m.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = DockColors.Text,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 19.sp)
+                if (m.artist.isNotEmpty()) {
+                    Text(m.artist, fontSize = 13.sp, color = DockColors.TextDim, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    } else {
+        if (thumb != null) {
+            Image(
+                thumb, contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(10.dp))
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        Text(m.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = DockColors.Text,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (m.artist.isNotEmpty()) {
+            Text(m.artist, fontSize = 14.sp, color = DockColors.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
-    Text(m.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = DockColors.Text,
-        maxLines = 2, overflow = TextOverflow.Ellipsis)
-    if (m.artist.isNotEmpty()) {
-        Text(m.artist, fontSize = 14.sp, color = DockColors.TextDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(if (dense) 4.dp else 8.dp))
 
     // 재생 중이면 PC가 마지막으로 알려준 위치에서 흐른 시간만큼 앞으로 계산
     val pcNow = now + state.clockOffset
@@ -366,7 +416,7 @@ private fun ColumnScope.MediaContent(m: Media, state: DockState, now: Double, vm
             Text(mmss(m.duration), fontSize = 12.sp, color = DockColors.TextDim)
         }
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(if (dense) 4.dp else 8.dp))
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceEvenly,
@@ -377,7 +427,7 @@ private fun ColumnScope.MediaContent(m: Media, state: DockState, now: Double, vm
         SmallButton(Icons.Filled.SkipPrevious, 52.dp) { vm.media("prev") }
         FilledIconButton(
             onClick = { vm.media("toggle") },
-            modifier = Modifier.size(72.dp),
+            modifier = Modifier.size(if (dense) 60.dp else 72.dp),
             colors = IconButtonDefaults.filledIconButtonColors(
                 containerColor = DockColors.Text, contentColor = DockColors.Background,
             ),
@@ -412,7 +462,7 @@ private fun Card(modifier: Modifier = Modifier, content: @Composable ColumnScope
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(DockColors.Surface)
-            .padding(16.dp),
+            .padding(if (LocalDense.current) 12.dp else 16.dp),
         content = content,
     )
 }

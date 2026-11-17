@@ -45,4 +45,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // PC가 기기로 접속하는 역방향 연결용 웹소켓 서버
+    implementation("org.java-websocket:Java-WebSocket:1.5.7")
 }
