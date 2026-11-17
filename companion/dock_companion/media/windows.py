@@ -61,6 +61,72 @@ class WindowsMedia:
         self.cfg = cfg
         self.manager = None
         self._thumb_key: Optional[str] = None
+        # ---- 재생 위치 ----
+        # Firefox 등 브라우저는 타임라인을 대부분 0으로 보내다가 가끔(재생/탐색/주기적으로)
+        # 0.3초 정도만 실제 값을 보냅니다. 1초 폴링으로는 거의 못 잡으므로 변경 이벤트를 구독해
+        # 실제 값이 올 때마다 기억하고(_raw), 그 사이에는 마지막 실제 값에서 흐른 시간으로 계산합니다.
+        self._raw: dict[str, tuple[float, float, float, float]] = {}  # aumid -> (pos, at, dur, 받은 시각)
+        self._subscribed: dict[str, Any] = {}  # aumid -> (session, token)
+        self._track_since = 0.0
+        self._tl: Optional[dict[str, float]] = None  # 지금 곡의 {"pos", "at", "dur", "src"}
+        self._last_status = ""
+
+    # ---- 타임라인 ----
+    def _record(self, aumid: str, tl) -> None:
+        """실제 값(길이 > 0)인 타임라인만 기억합니다. 이벤트 스레드에서도 불립니다."""
+        try:
+            dur = _seconds(tl.end_time) - _seconds(tl.start_time)
+            if dur <= 0:
+                return
+            try:
+                at = tl.last_updated_time.timestamp()
+            except Exception:
+                at = time.time()
+            self._raw[aumid] = (_seconds(tl.position), at, dur, time.time())
+        except Exception:
+            pass
+
+    def _subscribe(self, sessions) -> None:
+        for s in sessions:
+            aumid = s.source_app_user_model_id or ""
+            if aumid in self._subscribed:
+                continue
+            try:
+                token = s.add_timeline_properties_changed(
+                    lambda sender, _args, a=aumid: self._record(a, sender.get_timeline_properties()))
+                self._subscribed[aumid] = (s, token)
+            except Exception as e:
+                log.debug("타임라인 이벤트 구독 실패 %s: %s", aumid, e)
+
+    def _on_sessions_changed(self, *_args) -> None:
+        # 세션이 새로 생기거나 사라지면 다음 폴링 때 다시 구독
+        self._subscribed = {}
+
+    def _timeline(self, aumid: str, key: str, status: str, tl) -> dict[str, float]:
+        self._record(aumid, tl)
+        now = time.time()
+        if key != self._thumb_key:
+            self._track_since = now
+            self._tl = None
+        raw = self._raw.get(aumid)
+        # 곡이 바뀐 뒤에 받은 실제 값만 씁니다(이전 곡 값이 섞이지 않게)
+        if raw and raw[3] >= self._track_since - 0.5 and (self._tl is None or raw[1] != self._tl["src"]):
+            self._tl = {"pos": raw[0], "at": raw[1], "dur": raw[2], "src": raw[1]}
+        if self._tl is not None:
+            if self._last_status == "playing" and status != "playing":
+                # 일시정지: 흐른 시간만큼 앞으로 옮겨서 멈춘 위치로 고정
+                self._tl["pos"] = min(self._tl["pos"] + (now - self._tl["at"]), self._tl["dur"])
+                self._tl["at"] = now
+            elif self._last_status != "playing" and status == "playing":
+                self._tl["at"] = now
+        self._last_status = status
+        if self._tl is None:
+            return {"position": 0.0, "position_at": round(now, 1), "duration": 0.0}
+        return {
+            "position": round(self._tl["pos"], 1),
+            "position_at": round(self._tl["at"], 1),
+            "duration": round(self._tl["dur"], 1),
+        }
 
     def _pick_session(self):
         """브라우저에서 재생 중인 세션 > 브라우저 세션 > 윈도우가 고른 현재 세션."""
@@ -97,14 +163,13 @@ class WindowsMedia:
         props = await s.try_get_media_properties_async()
         tl = s.get_timeline_properties()
         status = STATUS.get(s.get_playback_info().playback_status, "unknown")
-        try:
-            updated = tl.last_updated_time.timestamp()
-        except Exception:
-            updated = time.time()
         title = props.title or ""
         artist = props.artist or ""
+        aumid = s.source_app_user_model_id or ""
 
-        key = f"{s.source_app_user_model_id}|{title}|{artist}"
+        key = f"{aumid}|{title}|{artist}"
+        timeline = self._timeline(aumid, key, status, tl)
+
         if key != self._thumb_key:
             self._thumb_key = key
             try:
@@ -121,9 +186,7 @@ class WindowsMedia:
             "artist": artist,
             "status": status,
             # 기기에서 재생 중일 때 position + (지금 - position_at) 으로 진행바를 움직입니다.
-            "position": round(_seconds(tl.position), 1),
-            "position_at": round(updated, 1),
-            "duration": round(_seconds(tl.end_time) - _seconds(tl.start_time), 1),
+            **timeline,
         }
 
     async def run(self) -> None:
@@ -131,8 +194,13 @@ class WindowsMedia:
             await self.hub.set_media({"available": False, "reason": "winrt 미설치 (pip install -r requirements.txt)"})
             return
         self.manager = await SessionManager.request_async()
+        try:
+            self.manager.add_sessions_changed(self._on_sessions_changed)
+        except Exception as e:
+            log.debug("세션 변경 이벤트 구독 실패: %s", e)
         while True:
             try:
+                self._subscribe(self.manager.get_sessions())
                 await self.hub.set_media(await self._snapshot())
             except Exception as e:
                 log.debug("미디어 상태 읽기 실패: %s", e)
@@ -162,6 +230,10 @@ class WindowsMedia:
         elif cmd == "seek":
             seconds = max(0.0, float(data.get("value", 0)))
             await s.try_change_playback_position_async(int(seconds * 10_000_000))
+            # 브라우저가 새 위치를 늦게 알려줘도 재생바가 바로 옮겨지게
+            if self._tl is not None:
+                self._tl["pos"] = min(seconds, self._tl["dur"])
+                self._tl["at"] = time.time()
         # 명령 직후 화면이 바로 반영되도록 즉시 한 번 더 읽습니다.
         await asyncio.sleep(0.15)
         await self.hub.set_media(await self._snapshot())

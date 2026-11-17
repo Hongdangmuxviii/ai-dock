@@ -49,6 +49,9 @@ async def main() -> None:
         server.on_media_command = media.command
         tasks.append(asyncio.create_task(media.run(), name="media"))
 
+    from .background import BackgroundWatcher
+    tasks.append(asyncio.create_task(BackgroundWatcher(hub).run(), name="background"))
+
     runner = await server.start()
     if cfg.device_address or cfg.device_scan:
         from .dialer import DeviceDialer

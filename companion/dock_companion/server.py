@@ -68,6 +68,7 @@ class DockServer:
         await send(self.hub.usage_message())
         await send({"type": "media", **self.hub.media})
         await send({"type": "thumbnail", "image": self.hub.thumbnail})
+        await send({"type": "background", "image": self.hub.background})
         self.hub.subscribe(send)
         try:
             async for msg in ws:

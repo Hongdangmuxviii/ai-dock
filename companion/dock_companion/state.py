@@ -51,6 +51,7 @@ class Hub:
         }
         self.media: dict[str, Any] = {"available": False}
         self.thumbnail: Optional[dict[str, str]] = None
+        self.background: Optional[dict[str, str]] = None
         self._listeners: set[Listener] = set()
         self._cache_path = DATA_DIR / "usage_cache.json"
         self._load_cache()
@@ -109,6 +110,11 @@ class Hub:
     async def set_thumbnail(self, thumb: Optional[dict[str, str]]) -> None:
         self.thumbnail = thumb
         await self.broadcast({"type": "thumbnail", "image": thumb})
+
+    # ---- 배경 이미지 ----
+    async def set_background(self, image: Optional[dict[str, str]]) -> None:
+        self.background = image
+        await self.broadcast({"type": "background", "image": image})
 
     # ---- 캐시 ----
     def _save_cache(self) -> None:
