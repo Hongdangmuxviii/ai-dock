@@ -1,0 +1,5 @@
+aiohttp>=3.10
+zeroconf>=0.132
+# 윈도우 미디어 제어(SMTC). 윈도우에서만 설치됩니다.
+winsdk>=1.0.0b10; sys_platform == "win32"
+certifi>=2024.2.2
