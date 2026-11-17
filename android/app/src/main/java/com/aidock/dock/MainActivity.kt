@@ -27,11 +27,31 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             DockTheme {
-                DockScreen(vm) {
-                    pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }
+                DockScreen(
+                    vm,
+                    onPickImage = {
+                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    onNightMode = ::setNightBrightness,
+                    onExit = { finishAndRemoveTask() },
+                )
             }
         }
+    }
+
+    /**
+     * 취침 모드에서는 이 앱 화면의 밝기만 낮춥니다(시스템 밝기 설정은 그대로).
+     * 1%는 시계가 너무 안 보여서 10%로 둡니다.
+     */
+    private fun setNightBrightness(night: Boolean) {
+        window.attributes = window.attributes.apply {
+            screenBrightness = if (night) NIGHT_BRIGHTNESS
+            else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+    }
+
+    companion object {
+        const val NIGHT_BRIGHTNESS = 0.10f
     }
 
     // 배경으로 쓸 사진 고르기 (사진 선택기가 없는 기기에서는 파일 선택 창으로 대신 열림)

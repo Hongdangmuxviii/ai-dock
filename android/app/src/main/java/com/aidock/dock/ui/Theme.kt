@@ -15,6 +15,10 @@ object DockColors {
     val Track = Color(0x33FFFFFF)
     val Divider = Color(0x1FFFFFFF)
 
+    // 취침 모드: 검은 화면 위 아주 어두운 회색
+    val NightText = Color(0xFF5C5C5C)
+    val NightTextDim = Color(0xFF3A3A3A)
+
     // 글래스모피즘 카드
     val GlassTop = Color(0x2EFFFFFF)
     val GlassBottom = Color(0x12FFFFFF)

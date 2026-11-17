@@ -3,7 +3,12 @@ package com.aidock.dock.ui
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
@@ -169,16 +174,38 @@ private val SecFmt = DateTimeFormatter.ofPattern("ss")
 private val DateFmt = DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREAN)
 
 @Composable
-fun DockScreen(vm: DockViewModel, onPickImage: () -> Unit) {
+fun DockScreen(
+    vm: DockViewModel,
+    onPickImage: () -> Unit,
+    onNightMode: (Boolean) -> Unit,
+    onExit: () -> Unit,
+) {
     val state by vm.state.collectAsStateWithLifecycle()
     var now by remember { mutableDoubleStateOf(DockViewModel.now()) }
     /** 열려 있는 설정 창: null | "background" | "connection" */
     var dialog by remember { mutableStateOf<String?>(null) }
+    var night by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
             now = DockViewModel.now()
             delay(1000L - System.currentTimeMillis() % 1000L)
+        }
+    }
+    // 화면 밝기는 액티비티 창 설정이라 바깥(MainActivity)에서 바꿉니다.
+    LaunchedEffect(night) { onNightMode(night) }
+
+    if (night) {
+        BackHandler { night = false }
+        NightClock(now) { night = false }
+        return
+    }
+
+    val handleMenu: (String) -> Unit = { key ->
+        when (key) {
+            "night" -> night = true
+            "exit" -> onExit()
+            else -> dialog = key
         }
     }
 
@@ -206,7 +233,7 @@ fun DockScreen(vm: DockViewModel, onPickImage: () -> Unit) {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
                     ClockPanel(now, state.connection, compact = true,
-                        onMenu = { dialog = it }, onRefresh = vm::refresh)
+                        onMenu = handleMenu, onRefresh = vm::refresh)
                     Spacer(Modifier.height(16.dp))
                     UsagePanel(state, now, Modifier.weight(1f), onRefresh = vm::refresh)
                 }
@@ -215,7 +242,7 @@ fun DockScreen(vm: DockViewModel, onPickImage: () -> Unit) {
         } else {
             Column(Modifier.fillMaxSize()) {
                 ClockPanel(now, state.connection, compact = dense,
-                    onMenu = { dialog = it }, onRefresh = vm::refresh)
+                    onMenu = handleMenu, onRefresh = vm::refresh)
                 Spacer(Modifier.height(if (dense) 12.dp else 20.dp))
                 UsagePanel(state, now, Modifier.weight(1f), onRefresh = vm::refresh)
                 Spacer(Modifier.height(if (dense) 12.dp else 16.dp))
@@ -238,6 +265,45 @@ fun DockScreen(vm: DockViewModel, onPickImage: () -> Unit) {
         "connection" -> ConnectionDialog(state, onDismiss = { dialog = null }) { addr, token ->
             vm.saveSettings(addr, token)
             dialog = null
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 취침 모드
+
+/**
+ * AOD처럼 최소한으로만 보이는 시계.
+ * - 완전히 검은 배경에 어두운 회색 글자 (밝기 최저와 함께 쓰면 어두운 방에서도 눈부시지 않음)
+ * - 1분마다 위치를 조금씩 옮겨 같은 자리에 자국이 남지 않게 (번인 방지)
+ * - 화면 아무 데나 탭하거나 뒤로가기를 누르면 원래 화면으로
+ */
+@Composable
+private fun NightClock(now: Double, onExit: () -> Unit) {
+    val t = Instant.ofEpochMilli((now * 1000).toLong()).atZone(ZoneId.systemDefault())
+    val minute = (now / 60).toLong()
+    // 3x3 격자 위치를 분마다 돌아가며 사용 (가운데 기준 ±24dp)
+    val step = (minute % 9).toInt()
+    val dx = ((step % 3) - 1) * 24
+    val dy = ((step / 3) - 1) * 24
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) { detectTapGestures { onExit() } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.offset(dx.dp, dy.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                t.format(TimeFmt),
+                fontSize = 84.sp,
+                fontWeight = FontWeight.Thin,
+                color = DockColors.NightText,
+                lineHeight = 84.sp,
+            )
+            Text(t.format(DateFmt), fontSize = 16.sp, color = DockColors.NightTextDim)
         }
     }
 }
@@ -292,9 +358,16 @@ private fun ClockPanel(
 private fun DockMenu(modifier: Modifier, onMenu: (String) -> Unit, onRefresh: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        IconButton(onClick = { open = true }, modifier = Modifier.size(44.dp)) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "메뉴", tint = DockColors.Text,
-                modifier = Modifier.size(28.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 취침 모드: 검은 화면에 시계만, 밝기 최저
+            IconButton(onClick = { onMenu("night") }, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Filled.Bedtime, contentDescription = "취침 모드", tint = DockColors.Text,
+                    modifier = Modifier.size(24.dp))
+            }
+            IconButton(onClick = { open = true }, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "메뉴", tint = DockColors.Text,
+                    modifier = Modifier.size(28.dp))
+            }
         }
         DropdownMenu(
             expanded = open,
@@ -310,6 +383,8 @@ private fun DockMenu(modifier: Modifier, onMenu: (String) -> Unit, onRefresh: ()
             item(Icons.Filled.Image, "배경화면") { onMenu("background") }
             item(Icons.Filled.Wifi, "PC 연결") { onMenu("connection") }
             item(Icons.Filled.Refresh, "사용량 새로고침", onRefresh)
+            item(Icons.Filled.Bedtime, "취침 모드") { onMenu("night") }
+            item(Icons.Filled.PowerSettingsNew, "앱 종료") { onMenu("exit") }
         }
     }
 }
