@@ -1,1 +1,2 @@
 companion/*.bat text eol=crlf
+companion/*.vbs text eol=crlf

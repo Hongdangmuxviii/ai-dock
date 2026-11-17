@@ -17,7 +17,11 @@ from .state import Hub
 
 async def main() -> None:
     cfg = load_config()
-    hub = Hub()
+    hub = Hub(enabled=[pid for pid, on in (
+        ("claude", cfg.claude_enabled),
+        ("codex", cfg.codex_enabled),
+        ("gemini", cfg.gemini_enabled),
+    ) if on])
     tasks: list[asyncio.Task] = []
     refresh_events: list[asyncio.Event] = []
 
@@ -46,6 +50,9 @@ async def main() -> None:
         tasks.append(asyncio.create_task(media.run(), name="media"))
 
     runner = await server.start()
+    if cfg.device_address or cfg.device_scan:
+        from .dialer import DeviceDialer
+        tasks.append(asyncio.create_task(DeviceDialer(cfg, server).run(), name="dialer"))
     mdns = MdnsAdvertiser(cfg.port, bool(cfg.token)) if cfg.advertise_mdns else None
     if mdns:
         await mdns.start()
@@ -59,12 +66,23 @@ async def main() -> None:
         await runner.cleanup()
 
 
+def _setup_logging() -> None:
+    fmt = "%(asctime)s %(name)s %(levelname)s %(message)s"
+    if sys.stderr is None:
+        # pythonw(콘솔 창 없이 실행)일 때는 ~/.aidock/companion.log 에 남깁니다.
+        from logging.handlers import RotatingFileHandler
+        from .config import DATA_DIR
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(DATA_DIR / "companion.log", maxBytes=1_000_000,
+                                      backupCount=2, encoding="utf-8")
+        handler.setFormatter(logging.Formatter(fmt, "%Y-%m-%d %H:%M:%S"))
+        logging.basicConfig(level=logging.INFO, handlers=[handler])
+    else:
+        logging.basicConfig(level=logging.INFO, format=fmt, datefmt="%H:%M:%S")
+
+
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    _setup_logging()
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

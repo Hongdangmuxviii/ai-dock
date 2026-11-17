@@ -37,6 +37,14 @@ class Config:
     gemini_oauth_client_id: str = ""
     gemini_oauth_client_secret: str = ""
 
+    # PC가 기기로 접속하는 방식 (기기에서 PC로 접속할 수 없는 네트워크용,
+    # 예: PC가 서브 공유기 뒤에 있을 때). 기기 앱은 device_port 에서 접속을 기다립니다.
+    # device_address: 기기 IP 또는 "IP:포트". 비워도 device_scan 만 있으면 찾습니다.
+    # device_scan: 기기를 찾을 대역(CIDR), 예: "192.168.35.0/24". 기기 IP가 바뀌어도 다시 찾습니다.
+    device_address: str = ""
+    device_scan: str = ""
+    device_port: int = 8766
+
     media_enabled: bool = True
     media_poll_sec: float = 1.0
 

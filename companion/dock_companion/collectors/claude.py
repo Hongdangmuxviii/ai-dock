@@ -128,9 +128,12 @@ class ClaudeCollector:
             return
         token = await asyncio.to_thread(read_access_token)
         if not token:
-            await self.hub.set_status(
-                "claude", "unavailable",
-                "Claude Code 로그인 토큰이 없거나 만료됨 (claude를 한 번 실행하면 다시 읽힘)")
+            if sys.platform != "darwin" and not (_config_dir() / ".credentials.json").exists():
+                # 데스크톱 앱만 쓰면 이 파일이 생기지 않습니다(앱이 로그인을 따로 관리).
+                msg = "CLI 로그인 정보 없음 (터미널에서 claude 로그인 또는 상태줄 연결 필요)"
+            else:
+                msg = "Claude Code 로그인 토큰이 만료됨 (claude를 한 번 실행하면 다시 읽힘)"
+            await self.hub.set_status("claude", "unavailable", msg)
             return
         headers = {
             "Authorization": f"Bearer {token}",

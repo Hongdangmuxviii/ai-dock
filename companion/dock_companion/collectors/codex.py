@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -102,6 +103,8 @@ class AppServer:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             limit=4 * 1024 * 1024,
+            # 콘솔 없이(pythonw) 실행 중일 때 codex 콘솔 창이 뜨지 않게
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self._reader = asyncio.create_task(self._read_loop())
         await self.request("initialize", {

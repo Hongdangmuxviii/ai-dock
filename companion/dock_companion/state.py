@@ -35,12 +35,19 @@ class ProviderUsage:
 Listener = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+ALL_PROVIDERS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "gemini": "Gemini CLI",
+}
+
+
 class Hub:
-    def __init__(self) -> None:
+    def __init__(self, enabled: Optional[list[str]] = None) -> None:
+        # 꺼둔 도구(config 의 *_enabled=false)는 목록에서 아예 빼서 기기 화면에 카드가 안 생기게 합니다.
+        ids = [pid for pid in ALL_PROVIDERS if enabled is None or pid in enabled]
         self.providers: dict[str, ProviderUsage] = {
-            "claude": ProviderUsage("claude", "Claude Code"),
-            "codex": ProviderUsage("codex", "Codex"),
-            "gemini": ProviderUsage("gemini", "Gemini CLI"),
+            pid: ProviderUsage(pid, ALL_PROVIDERS[pid]) for pid in ids
         }
         self.media: dict[str, Any] = {"available": False}
         self.thumbnail: Optional[dict[str, str]] = None

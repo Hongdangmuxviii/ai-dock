@@ -47,7 +47,17 @@ class DockServer:
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         log.info("기기 접속: %s", request.remote)
+        try:
+            await self.run_session(ws)
+        finally:
+            log.info("기기 연결 끊김: %s", request.remote)
+        return ws
 
+    async def run_session(self, ws) -> None:
+        """웹소켓 하나(기기가 접속했든 PC가 기기로 접속했든)를 끝날 때까지 처리합니다.
+
+        ws 는 aiohttp 의 WebSocketResponse 또는 ClientWebSocketResponse.
+        """
         send_lock = asyncio.Lock()
 
         async def send(msg: dict[str, Any]) -> None:
@@ -79,8 +89,6 @@ class DockServer:
                     await send({"type": "pong"})
         finally:
             self.hub.unsubscribe(send)
-            log.info("기기 연결 끊김: %s", request.remote)
-        return ws
 
     async def _statusline(self, request: web.Request) -> web.Response:
         if request.remote not in ("127.0.0.1", "::1"):

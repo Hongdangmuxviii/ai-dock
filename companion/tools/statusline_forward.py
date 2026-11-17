@@ -53,6 +53,12 @@ def summary(payload: dict) -> str:
 
 
 def main() -> None:
+    # 윈도우 기본 콘솔 인코딩(cp949)이 아니라 UTF-8로 주고받아야 Claude Code가 글자를 제대로 읽습니다.
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw)

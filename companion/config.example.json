@@ -6,5 +6,8 @@
   "gemini_poll_sec": 600,
   "codex_path": "",
   "gemini_oauth_client_id": "",
-  "gemini_oauth_client_secret": ""
+  "gemini_oauth_client_secret": "",
+  "device_address": "",
+  "device_scan": "",
+  "device_port": 8766
 }
