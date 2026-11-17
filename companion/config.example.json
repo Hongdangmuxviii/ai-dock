@@ -1,0 +1,10 @@
+{
+  "port": 8765,
+  "token": "",
+  "claude_poll_sec": 300,
+  "codex_poll_sec": 300,
+  "gemini_poll_sec": 600,
+  "codex_path": "",
+  "gemini_oauth_client_id": "",
+  "gemini_oauth_client_secret": ""
+}
