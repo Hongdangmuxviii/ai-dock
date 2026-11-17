@@ -4,6 +4,8 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -25,8 +27,15 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             DockTheme {
-                DockScreen(vm)
+                DockScreen(vm) {
+                    pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
             }
         }
+    }
+
+    // 배경으로 쓸 사진 고르기 (사진 선택기가 없는 기기에서는 파일 선택 창으로 대신 열림)
+    private val pickImage = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.setDeviceBackground(uri)
     }
 }

@@ -2,6 +2,7 @@ package com.aidock.dock
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.net.nsd.NsdManager
@@ -30,6 +31,7 @@ import org.json.JSONArray
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
 import org.json.JSONObject
+import java.io.File
 import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
 
@@ -42,7 +44,20 @@ data class DockState(
     val thumbnail: ImageBitmap? = null,
     val manualAddress: String = "",
     val token: String = "",
-)
+    /** 배경: "pc"(PC가 보낸 이미지) | "device"(기기에서 고른 사진) | "default"(기본 그라데이션) */
+    val bgMode: String = "pc",
+    /** 배경 이미지 위에 덮는 어두운 막의 불투명도 (글자 가독성) */
+    val bgDim: Float = 0.35f,
+    val pcBackground: ImageBitmap? = null,
+    val deviceBackground: ImageBitmap? = null,
+) {
+    val background: ImageBitmap?
+        get() = when (bgMode) {
+            "device" -> deviceBackground
+            "pc" -> pcBackground
+            else -> null
+        }
+}
 
 class DockViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("dock", Context.MODE_PRIVATE)
@@ -57,8 +72,13 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
             clockOffset = prefs.getFloat("clock_offset", 0f).toDouble(),
             manualAddress = prefs.getString("manual_address", "") ?: "",
             token = prefs.getString("token", "") ?: "",
+            bgMode = prefs.getString("bg_mode", "pc") ?: "pc",
+            bgDim = prefs.getFloat("bg_dim", 0.35f),
         )
     )
+
+    private val pcBgFile = File(app.filesDir, "bg_pc.img")
+    private val deviceBgFile = File(app.filesDir, "bg_device.img")
     val state: StateFlow<DockState> = _state.asStateFlow()
 
     private var socket: WebSocket? = null
@@ -70,8 +90,73 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
     private var inbound: InboundServer? = null
 
     init {
+        // 저장해둔 배경을 먼저 띄워서 PC가 꺼져 있어도 배경이 유지되게
+        viewModelScope.launch(Dispatchers.IO) {
+            val pc = decodeFile(pcBgFile)
+            val dev = decodeFile(deviceBgFile)
+            _state.update { it.copy(pcBackground = pc, deviceBackground = dev) }
+        }
         startInbound()
         start()
+    }
+
+    // ---------------- 배경 ----------------
+
+    fun setBackgroundMode(mode: String) {
+        prefs.edit().putString("bg_mode", mode).apply()
+        _state.update { it.copy(bgMode = mode) }
+    }
+
+    fun setBackgroundDim(dim: Float) {
+        prefs.edit().putFloat("bg_dim", dim).apply()
+        _state.update { it.copy(bgDim = dim) }
+    }
+
+    /** 사진 선택기에서 고른 이미지를 화면 크기에 맞게 줄여 저장하고 배경으로 씁니다. */
+    fun setDeviceBackground(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val bytes = runCatching {
+                getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }.getOrNull() ?: return@launch
+            val bmp = decodeSampled(bytes) ?: return@launch
+            runCatching {
+                deviceBgFile.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+            }
+            prefs.edit().putString("bg_mode", "device").apply()
+            _state.update { it.copy(deviceBackground = bmp.asImageBitmap(), bgMode = "device") }
+        }
+    }
+
+    private fun onPcBackground(img: JSONObject?) {
+        if (img == null) {
+            pcBgFile.delete()
+            prefs.edit().remove("bg_pc_id").apply()
+            _state.update { it.copy(pcBackground = null) }
+            return
+        }
+        val id = img.optString("id")
+        if (id.isNotEmpty() && id == prefs.getString("bg_pc_id", null) &&
+            pcBgFile.exists() && _state.value.pcBackground != null
+        ) return // 이미 받은 이미지
+        val bytes = runCatching { Base64.decode(img.optString("b64"), Base64.DEFAULT) }.getOrNull() ?: return
+        val bmp = decodeSampled(bytes) ?: return
+        runCatching { pcBgFile.writeBytes(bytes) }
+        prefs.edit().putString("bg_pc_id", id).apply()
+        _state.update { it.copy(pcBackground = bmp.asImageBitmap()) }
+    }
+
+    private fun decodeFile(f: File): ImageBitmap? =
+        if (!f.exists()) null else runCatching { decodeSampled(f.readBytes())?.asImageBitmap() }.getOrNull()
+
+    /** 긴 변이 MAX_BG_PX 정도가 되도록 줄여서 디코드 (큰 사진으로 메모리가 터지지 않게) */
+    private fun decodeSampled(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_BG_PX) sample *= 2
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+            BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
     // ---------------- 역방향 연결 (PC → 기기) ----------------
@@ -192,6 +277,7 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _state.update { it.copy(thumbnail = bmp) }
             }
+            "background" -> onPcBackground(msg.optJSONObject("image"))
         }
     }
 
@@ -243,6 +329,7 @@ class DockViewModel(app: Application) : AndroidViewModel(app) {
         const val TAG = "AIDock"
         /** PC가 이 기기로 접속할 때 쓰는 포트 (컴패니언 config 의 device_port 와 같아야 함) */
         const val INBOUND_PORT = 8766
+        const val MAX_BG_PX = 1600
         fun now() = System.currentTimeMillis() / 1000.0
     }
 }

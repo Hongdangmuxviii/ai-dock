@@ -9,9 +9,17 @@ object DockColors {
     val Background = Color(0xFF000000)
     val Surface = Color(0xFF15161A)
     val SurfaceHigh = Color(0xFF202228)
-    val Text = Color(0xFFF2F2F2)
-    val TextDim = Color(0xFF8B8F98)
-    val Track = Color(0xFF2C2F36)
+    val Text = Color(0xFFF7F7FA)
+    // 유리 카드 위에서도 읽히도록 예전보다 밝게
+    val TextDim = Color(0xFFC2C6D0)
+    val Track = Color(0x33FFFFFF)
+    val Divider = Color(0x1FFFFFFF)
+
+    // 글래스모피즘 카드
+    val GlassTop = Color(0x2EFFFFFF)
+    val GlassBottom = Color(0x12FFFFFF)
+    val GlassEdgeTop = Color(0x66FFFFFF)
+    val GlassEdgeBottom = Color(0x14FFFFFF)
     val Ok = Color(0xFF5BD18B)
     val Warn = Color(0xFFF2B84B)
     val Danger = Color(0xFFF2655A)

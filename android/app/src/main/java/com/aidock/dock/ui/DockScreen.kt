@@ -1,6 +1,41 @@
 package com.aidock.dock.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -85,15 +120,60 @@ import kotlin.math.roundToInt
  */
 private val LocalDense = staticCompositionLocalOf { false }
 
+/** 화면 전체 배경. 유리 카드가 자기 위치의 배경을 흐리게 다시 그릴 때 씁니다. */
+private class Backdrop(val image: ImageBitmap?, val dim: Float, val rootSize: Size)
+
+private val LocalBackdrop = compositionLocalOf { Backdrop(null, 0f, Size.Zero) }
+
+/** 배경을 그립니다. offset 은 이 그림이 화면 왼쪽 위에서 얼마나 떨어져 있는지의 음수. */
+private fun DrawScope.drawBackdrop(b: Backdrop, offset: Offset) {
+    val w = b.rootSize.width
+    val h = b.rootSize.height
+    if (w <= 0f || h <= 0f) return
+    translate(offset.x, offset.y) {
+        val img = b.image
+        if (img != null) {
+            // ContentScale.Crop 과 같은 방식으로 화면을 꽉 채움
+            val scale = max(w / img.width, h / img.height)
+            val dw = img.width * scale
+            val dh = img.height * scale
+            drawImage(
+                img,
+                dstOffset = IntOffset(((w - dw) / 2).roundToInt(), ((h - dh) / 2).roundToInt()),
+                dstSize = IntSize(dw.roundToInt(), dh.roundToInt()),
+                filterQuality = FilterQuality.Medium,
+            )
+            drawRect(Color.Black.copy(alpha = b.dim), size = Size(w, h))
+        } else {
+            // 기본 배경: 짙은 남색 위에 서비스 색의 은은한 빛
+            drawRect(
+                Brush.verticalGradient(listOf(Color(0xFF0C1028), Color(0xFF140F2E), Color(0xFF06060B))),
+                size = Size(w, h),
+            )
+            fun glow(color: Color, cx: Float, cy: Float, r: Float) = drawCircle(
+                Brush.radialGradient(listOf(color, Color.Transparent), center = Offset(cx, cy), radius = r),
+                radius = r, center = Offset(cx, cy),
+            )
+            glow(DockColors.Claude.copy(alpha = 0.55f), w * 0.92f, h * 0.20f, w * 0.75f)
+            glow(DockColors.Codex.copy(alpha = 0.45f), w * 0.05f, h * 0.55f, w * 0.80f)
+            glow(DockColors.Gemini.copy(alpha = 0.45f), w * 0.75f, h * 0.95f, w * 0.75f)
+        }
+    }
+}
+
+/** 배경 이미지 위에 바로 놓이는 시계 글자가 묻히지 않게 */
+private val TextShadowStyle = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.5f), Offset(0f, 2f), 18f))
+
 private val TimeFmt = DateTimeFormatter.ofPattern("HH:mm")
 private val SecFmt = DateTimeFormatter.ofPattern("ss")
 private val DateFmt = DateTimeFormatter.ofPattern("M월 d일 (E)", Locale.KOREAN)
 
 @Composable
-fun DockScreen(vm: DockViewModel) {
+fun DockScreen(vm: DockViewModel, onPickImage: () -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     var now by remember { mutableDoubleStateOf(DockViewModel.now()) }
-    var showSettings by remember { mutableStateOf(false) }
+    /** 열려 있는 설정 창: null | "background" | "connection" */
+    var dialog by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -104,10 +184,19 @@ fun DockScreen(vm: DockViewModel) {
 
     val config = LocalConfiguration.current
     val smallScreen = minOf(config.screenWidthDp, config.screenHeightDp) < 480
-    BoxWithConstraints(
+    var rootSize by remember { mutableStateOf(Size.Zero) }
+    val backdrop = Backdrop(state.background, state.bgDim, rootSize)
+    CompositionLocalProvider(LocalBackdrop provides backdrop) {
+    Box(
         Modifier
             .fillMaxSize()
             .background(DockColors.Background)
+            .onSizeChanged { rootSize = Size(it.width.toFloat(), it.height.toFloat()) }
+            .drawBehind { drawBackdrop(backdrop, Offset.Zero) }
+    )
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
             .padding(if (smallScreen) 16.dp else 20.dp)
     ) {
         val landscape = maxWidth > maxHeight
@@ -116,7 +205,8 @@ fun DockScreen(vm: DockViewModel) {
         if (landscape) {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    ClockPanel(now, state.connection, compact = true) { showSettings = true }
+                    ClockPanel(now, state.connection, compact = true,
+                        onMenu = { dialog = it }, onRefresh = vm::refresh)
                     Spacer(Modifier.height(16.dp))
                     UsagePanel(state, now, Modifier.weight(1f), onRefresh = vm::refresh)
                 }
@@ -124,7 +214,8 @@ fun DockScreen(vm: DockViewModel) {
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                ClockPanel(now, state.connection, compact = dense) { showSettings = true }
+                ClockPanel(now, state.connection, compact = dense,
+                    onMenu = { dialog = it }, onRefresh = vm::refresh)
                 Spacer(Modifier.height(if (dense) 12.dp else 20.dp))
                 UsagePanel(state, now, Modifier.weight(1f), onRefresh = vm::refresh)
                 Spacer(Modifier.height(if (dense) 12.dp else 16.dp))
@@ -134,10 +225,19 @@ fun DockScreen(vm: DockViewModel) {
         }
     }
 
-    if (showSettings) {
-        SettingsDialog(state, onDismiss = { showSettings = false }) { addr, token ->
+    }
+
+    when (dialog) {
+        "background" -> BackgroundDialog(
+            state,
+            onDismiss = { dialog = null },
+            onBackgroundMode = vm::setBackgroundMode,
+            onDim = vm::setBackgroundDim,
+            onPickImage = { dialog = null; onPickImage() },
+        )
+        "connection" -> ConnectionDialog(state, onDismiss = { dialog = null }) { addr, token ->
             vm.saveSettings(addr, token)
-            showSettings = false
+            dialog = null
         }
     }
 }
@@ -146,14 +246,20 @@ fun DockScreen(vm: DockViewModel) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ClockPanel(now: Double, conn: Connection, compact: Boolean, onLongPress: () -> Unit) {
+private fun ClockPanel(
+    now: Double,
+    conn: Connection,
+    compact: Boolean,
+    onMenu: (String) -> Unit,
+    onRefresh: () -> Unit,
+) {
     val t = Instant.ofEpochMilli((now * 1000).toLong()).atZone(ZoneId.systemDefault())
     Column(
         Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = {}, onLongClick = onLongPress)
+            .combinedClickable(onClick = {}, onLongClick = { onMenu("connection") })
     ) {
-        Row(verticalAlignment = Alignment.Bottom) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             Text(
                 t.format(TimeFmt),
                 fontSize = if (compact) 72.sp else 96.sp,
@@ -161,6 +267,7 @@ private fun ClockPanel(now: Double, conn: Connection, compact: Boolean, onLongPr
                 fontFamily = FontFamily.SansSerif,
                 color = DockColors.Text,
                 lineHeight = if (compact) 72.sp else 96.sp,
+                style = TextShadowStyle,
             )
             Spacer(Modifier.width(8.dp))
             Text(
@@ -169,11 +276,40 @@ private fun ClockPanel(now: Double, conn: Connection, compact: Boolean, onLongPr
                 color = DockColors.TextDim,
                 modifier = Modifier.padding(bottom = if (compact) 10.dp else 14.dp),
             )
+            Spacer(Modifier.weight(1f))
+            DockMenu(Modifier.align(Alignment.Top), onMenu, onRefresh)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(t.format(DateFmt), fontSize = 20.sp, color = DockColors.TextDim)
+            Text(t.format(DateFmt), fontSize = 20.sp, color = DockColors.TextDim, style = TextShadowStyle)
             Spacer(Modifier.weight(1f))
             ConnectionBadge(conn)
+        }
+    }
+}
+
+/** 우측 상단 메뉴 버튼(⋮). 누르면 설정 항목이 펼쳐집니다. */
+@Composable
+private fun DockMenu(modifier: Modifier, onMenu: (String) -> Unit, onRefresh: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(44.dp)) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "메뉴", tint = DockColors.Text,
+                modifier = Modifier.size(28.dp))
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.background(DockColors.SurfaceHigh),
+        ) {
+            @Composable
+            fun item(icon: ImageVector, label: String, action: () -> Unit) = DropdownMenuItem(
+                text = { Text(label, color = DockColors.Text, fontSize = 16.sp) },
+                leadingIcon = { Icon(icon, null, tint = DockColors.TextDim) },
+                onClick = { open = false; action() },
+            )
+            item(Icons.Filled.Image, "배경화면") { onMenu("background") }
+            item(Icons.Filled.Wifi, "PC 연결") { onMenu("connection") }
+            item(Icons.Filled.Refresh, "사용량 새로고침", onRefresh)
         }
     }
 }
@@ -199,20 +335,31 @@ private fun ConnectionBadge(conn: Connection) {
 @Composable
 private fun UsagePanel(state: DockState, now: Double, modifier: Modifier, onRefresh: () -> Unit) {
     val pcNow = now + state.clockOffset
-    Column(
-        modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(if (LocalDense.current) 8.dp else 12.dp),
-    ) {
-        if (state.providers.isEmpty()) {
-            Card {
-                Text("PC 컴패니언에 연결되면 사용량이 표시됩니다.", color = DockColors.TextDim, fontSize = 15.sp)
+    val dense = LocalDense.current
+    // 사용량은 카드 없이 배경 위에 바로 얹습니다(시계처럼). 밝은 배경에서도 읽히게 글자에 그림자.
+    CompositionLocalProvider(LocalTextStyle provides LocalTextStyle.current.merge(TextShadowStyle)) {
+        Column(
+            modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+            if (state.providers.isEmpty()) {
+                Text("PC 컴패니언에 연결되면 사용량이 표시됩니다.", color = DockColors.TextDim, fontSize = 15.sp,
+                    modifier = Modifier.padding(vertical = 8.dp))
             }
-        }
-        state.providers.forEach { p ->
-            Card(Modifier.combinedClickable(onClick = {}, onLongClick = onRefresh)) {
-                ProviderCard(p, pcNow)
+            state.providers.forEachIndexed { i, p ->
+                if (i > 0) {
+                    // 도구 사이 아주 옅은 구분선
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(DockColors.Divider))
+                }
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(onClick = {}, onLongClick = onRefresh)
+                        .padding(vertical = if (dense) 12.dp else 16.dp)
+                ) {
+                    ProviderCard(p, pcNow)
+                }
             }
         }
     }
@@ -329,7 +476,7 @@ private fun statusColor(status: String) = when (status) {
 @Composable
 private fun MediaPanel(state: DockState, now: Double, vm: DockViewModel, modifier: Modifier) {
     val m = state.media
-    Card(modifier) {
+    Card(modifier, glass = true) {
         if (state.connection !is Connection.Connected) {
             Text("PC와 연결되면 리모컨을 쓸 수 있습니다.", color = DockColors.TextDim, fontSize = 15.sp)
             return@Card
@@ -398,23 +545,21 @@ private fun ColumnScope.MediaContent(m: Media, state: DockState, now: Double, vm
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
 
-    if (m.duration > 0) {
-        Slider(
-            value = if (dragging) dragValue else pos.toFloat(),
-            onValueChange = { dragging = true; dragValue = it },
-            onValueChangeFinished = { vm.media("seek", dragValue.toDouble()); dragging = false },
-            valueRange = 0f..m.duration.toFloat(),
-            colors = SliderDefaults.colors(
-                thumbColor = DockColors.Text,
-                activeTrackColor = DockColors.Text,
-                inactiveTrackColor = DockColors.Track,
-            ),
+    // 재생바는 항상 자리를 차지합니다. 길이를 모를 때(0)는 비활성으로만 바꿔서 화면이 들썩이지 않게.
+    val known = m.duration > 0
+    val shown = if (dragging) dragValue.toDouble() else pos
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(if (known) mmss(shown) else "--:--", fontSize = 12.sp, color = DockColors.TextDim,
+            modifier = Modifier.width(44.dp))
+        SeekBar(
+            fraction = if (known) (shown / m.duration).toFloat() else 0f,
+            enabled = known,
+            onDrag = { f -> dragging = true; dragValue = (f * m.duration).toFloat() },
+            onRelease = { f -> vm.media("seek", f * m.duration); dragging = false },
+            modifier = Modifier.weight(1f),
         )
-        Row {
-            Text(mmss(if (dragging) dragValue.toDouble() else pos), fontSize = 12.sp, color = DockColors.TextDim)
-            Spacer(Modifier.weight(1f))
-            Text(mmss(m.duration), fontSize = 12.sp, color = DockColors.TextDim)
-        }
+        Text(if (known) mmss(m.duration) else "--:--", fontSize = 12.sp, color = DockColors.TextDim,
+            modifier = Modifier.width(44.dp), textAlign = TextAlign.End)
     }
     Spacer(Modifier.height(if (dense) 4.dp else 8.dp))
     Row(
@@ -439,6 +584,48 @@ private fun ColumnScope.MediaContent(m: Media, state: DockState, now: Double, vm
     }
 }
 
+/** 얇은 재생바. 탭하거나 끌어서 위치를 옮기고, 손을 떼면 onRelease 로 최종 위치(0~1)를 알립니다. */
+@Composable
+private fun SeekBar(
+    fraction: Float,
+    enabled: Boolean,
+    onDrag: (Float) -> Unit,
+    onRelease: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var width by remember { mutableFloatStateOf(1f) }
+    var last by remember { mutableFloatStateOf(0f) }
+    fun at(x: Float) = (x / width).coerceIn(0f, 1f)
+    val input = if (!enabled) Modifier else Modifier
+        .pointerInput(Unit) {
+            detectTapGestures { o -> onRelease(at(o.x)) }
+        }
+        .pointerInput(Unit) {
+            detectHorizontalDragGestures(
+                onDragStart = { o -> last = at(o.x); onDrag(last) },
+                onHorizontalDrag = { change, _ -> last = at(change.position.x); onDrag(last) },
+                onDragEnd = { onRelease(last) },
+                onDragCancel = { onRelease(last) },
+            )
+        }
+    Canvas(
+        modifier
+            .height(24.dp)
+            .padding(horizontal = 6.dp)
+            .onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }
+            .then(input)
+    ) {
+        val y = size.height / 2
+        val track = 4.dp.toPx()
+        val f = fraction.coerceIn(0f, 1f)
+        drawLine(DockColors.Track, Offset(0f, y), Offset(size.width, y), track, StrokeCap.Round)
+        if (enabled) {
+            drawLine(DockColors.Text, Offset(0f, y), Offset(size.width * f, y), track, StrokeCap.Round)
+            drawCircle(DockColors.Text, 6.dp.toPx(), Offset(size.width * f, y))
+        }
+    }
+}
+
 @Composable
 private fun SmallButton(icon: ImageVector, size: Dp = 44.dp, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(size)) {
@@ -455,33 +642,119 @@ private fun mmss(sec: Double): String {
 
 // ---------------------------------------------------------------- 공통
 
+/**
+ * 카드. glass=true 면 글래스모피즘(카드 자리의 배경을 흐리게 다시 그리고 반투명 막과 빛나는 테두리),
+ * false 면 불투명한 단색 카드입니다. 지금은 유튜브 리모컨만 유리 카드이고, 사용량은 카드 없이 배경 위에 바로 그립니다.
+ * (흐림은 안드로이드 12 이상에서만 적용되고, 그 아래에서는 반투명 막만 보입니다)
+ */
 @Composable
-private fun Card(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
+private fun Card(
+    modifier: Modifier = Modifier,
+    glass: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val dense = LocalDense.current
+    val backdrop = LocalBackdrop.current
+    var pos by remember { mutableStateOf(Offset.Zero) }
+    val shape = RoundedCornerShape(if (dense) 20.dp else 24.dp)
+    Box(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(DockColors.Surface)
-            .padding(if (LocalDense.current) 12.dp else 16.dp),
-        content = content,
+            .then(if (glass) Modifier.onGloballyPositioned { pos = it.positionInRoot() } else Modifier)
+            .clip(shape)
+    ) {
+        if (glass) {
+            Canvas(Modifier.matchParentSize().blur(28.dp, BlurredEdgeTreatment.Rectangle)) {
+                drawBackdrop(backdrop, -pos)
+            }
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Brush.verticalGradient(listOf(DockColors.GlassTop, DockColors.GlassBottom)))
+                    .border(1.dp, Brush.verticalGradient(listOf(DockColors.GlassEdgeTop, DockColors.GlassEdgeBottom)), shape)
+            )
+        } else {
+            Box(Modifier.matchParentSize().background(DockColors.Surface))
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(if (dense) 14.dp else 18.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun BackgroundDialog(
+    state: DockState,
+    onDismiss: () -> Unit,
+    onBackgroundMode: (String) -> Unit,
+    onDim: (Float) -> Unit,
+    onPickImage: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("배경화면") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("pc" to "PC 이미지", "device" to "기기 사진", "default" to "기본").forEach { (mode, label) ->
+                        FilterChip(
+                            selected = state.bgMode == mode,
+                            onClick = { onBackgroundMode(mode) },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+                Text(
+                    when (state.bgMode) {
+                        "pc" -> if (state.pcBackground == null)
+                            "PC의 %USERPROFILE%\\.aidock\\background.jpg 를 두면 자동으로 받아옵니다. (png/webp도 가능)"
+                        else "PC에서 받은 이미지를 쓰는 중. PC의 파일을 바꾸면 몇 초 안에 반영됩니다."
+                        "device" -> if (state.deviceBackground == null) "아래 버튼으로 사진을 고르세요." else "기기에서 고른 사진을 쓰는 중."
+                        else -> "기본 그라데이션 배경."
+                    },
+                    fontSize = 12.sp, color = DockColors.TextDim,
+                )
+                OutlinedButton(onClick = onPickImage) { Text("기기에서 사진 고르기") }
+                Text("배경 어둡게: ${(state.bgDim * 100).roundToInt()}%", fontSize = 13.sp, color = DockColors.TextDim)
+                Slider(value = state.bgDim, onValueChange = onDim, valueRange = 0f..0.8f)
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
     )
 }
 
 @Composable
-private fun SettingsDialog(
+private fun ConnectionDialog(
     state: DockState,
     onDismiss: () -> Unit,
     onSave: (address: String, token: String) -> Unit,
 ) {
     var address by remember { mutableStateOf(state.manualAddress) }
     var token by remember { mutableStateOf(state.token) }
+    val conn = when (val c = state.connection) {
+        is Connection.Connected -> "연결됨: ${c.address}"
+        is Connection.Connecting -> "연결 중: ${c.address}"
+        is Connection.Searching -> "PC를 찾는 중"
+        is Connection.Failed -> "실패: ${c.reason}"
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("연결 설정") },
+        title = { Text("PC 연결") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(conn, fontSize = 13.sp, color = DockColors.TextDim)
                 Text(
-                    "PC 주소를 비워두면 같은 네트워크에서 자동으로 찾습니다.",
+                    "PC 주소를 비워두면 같은 네트워크에서 자동으로 찾습니다. " +
+                        "PC가 이 기기로 접속하는 방식(컴패니언 device_address)이면 비워두세요.",
                     fontSize = 13.sp, color = DockColors.TextDim,
                 )
                 OutlinedTextField(
